@@ -1,15 +1,5 @@
 #!/bin/bash
 
-# Verificar si el archivo env.example existe
-if [ -f env.example ]; then
-  # Copiar el contenido de env.example a .env
-  cp env.example .env
-  echo "✅ El archivo .env se ha creado correctamente a partir de env.example."
-else
-  echo "❌ El archivo env.example no se encontró. Asegúrate de que exista en el directorio actual."
-  exit 1
-fi
-
 # Registrar la hora actual
 now=$(date +'%H:%M:%S')
 

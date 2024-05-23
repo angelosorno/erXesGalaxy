@@ -8,6 +8,7 @@ else
   exit 1
 fi
 
+
 # Instalar los paquetes necesarios
 sudo yum install -y passwd util-linux
 
