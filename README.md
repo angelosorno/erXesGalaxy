@@ -23,7 +23,8 @@ Crea un archivo `.env` en el mismo directorio con el siguiente contenido:
 USER_PASSWORD=YOUR_PASSWORD
 ```
 
-Reemplaza `YOUR_PASSWORD` con la contraseña que desees asignar al usuario `erxes`.
+Reemplaza `YOUR_PASSWORD` con la contraseña que desees asignar al usuario `erxes`
+Reemplaza `sub.domain.org` con el dominio que usara en el App erXes
 
 ### 3. Configurar permisos de ejecución 🔑
 

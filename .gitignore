@@ -49,4 +49,11 @@ temp/
 # System files
 Thumbs.db
 
+# VS Code Config
+.vscode
+
 DELETE
+
+# Storage and Project Folder
+aws
+erxes
