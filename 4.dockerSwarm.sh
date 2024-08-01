@@ -1,4 +1,5 @@
 #!/bin/bash
+docker swarm leave --force
 
 # Verificar si Docker Swarm ya está inicializado
 SWARM_STATUS=$(sudo docker info --format '{{.Swarm.LocalNodeState}}')
