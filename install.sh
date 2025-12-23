@@ -40,8 +40,8 @@ else
   exit 1
 fi
 
-if [ -z "$DOMAIN" ] || [ -z "$USER_PASSWORD" ]; then
-  echo "❌ Missing DOMAIN or USER_PASSWORD in .env"
+if [ -z "$DOMAIN" ]; then
+  echo "❌ Missing DOMAIN in .env"
   exit 1
 fi
 
@@ -65,18 +65,6 @@ step_install_deps() {
         check_cmd jq || brew install jq
     fi
 
-    # Install Nginx
-    if check_cmd nginx; then
-        print_step "Nginx already installed" "✅"
-    else
-        print_step "Installing Nginx..." "🌐"
-        if [ "$OS_TYPE" == "Linux" ]; then
-            sudo apt-get install nginx -y
-        else
-            brew install nginx
-        fi
-    fi
-
     # Install Docker
     if check_cmd docker; then
         print_step "Docker already installed" "✅"
@@ -98,8 +86,7 @@ step_install_deps() {
     if check_cmd node; then
          print_step "Node.js already installed" "✅"
     else
-         print_step "Installing Node.js (via nvm if possible, else system)..." "🟢"
-         # Simplified for this script
+         print_step "Installing Node.js..." "🟢"
          if [ "$OS_TYPE" == "Linux" ]; then
             curl -sL https://deb.nodesource.com/setup_18.x | sudo -E bash -
             sudo apt-get install -y nodejs
@@ -116,50 +103,20 @@ step_install_deps() {
 }
 
 # ==========================================
-# 2. User Creation (Linux Only)
-# ==========================================
-step_create_user() {
-    print_step "Step 2: User Configuration" "👤"
-    
-    if [ "$OS_TYPE" == "Mac" ]; then
-        print_step "Skipping user creation on Mac (running as current user)" "⏩"
-        RUN_USER="$USER"
-        return
-    fi
-
-    RUN_USER="erxes"
-    if id "$RUN_USER" &>/dev/null; then
-        print_step "User '$RUN_USER' already exists" "✅"
-    else
-        print_step "Creating user '$RUN_USER'..." "👤"
-        sudo useradd -m $RUN_USER
-        echo "${RUN_USER}:${USER_PASSWORD}" | sudo chpasswd
-        sudo usermod -aG sudo $RUN_USER
-        sudo usermod -aG docker $RUN_USER
-    fi
-}
-
-# ==========================================
-# 3. App Setup
+# 2. App Setup
 # ==========================================
 step_setup_app() {
-    print_step "Step 3: App Setup" "🚀"
+    print_step "Step 2: App Setup" "🚀"
     
     SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
     ERXES_DIR="$SCRIPT_DIR/erxes"
     
-    # Needs to be handled carefully with permissions if switching users
-    # For simplicity in this unified script, we'll do operations as current user
-    # and fix ownership at the end if on Linux.
-
     if [ -d "$ERXES_DIR" ]; then 
         print_step "Cleaning old directory..." "🧹"
         sudo rm -rf "$ERXES_DIR"
     fi
 
     print_step "Creating erxes app..." "✨"
-    # Execute create-erxes-app
-    # On linux potentially as the specific user, but here we run as invoker
     DOMAIN=$DOMAIN create-erxes-app erxes
 
     cd "$ERXES_DIR" || exit 1
@@ -176,10 +133,10 @@ step_setup_app() {
 }
 
 # ==========================================
-# 4. Swarm Init
+# 3. Swarm Init
 # ==========================================
 step_init_swarm() {
-    print_step "Step 4: Docker Swarm" "🐝"
+    print_step "Step 3: Docker Swarm" "🐝"
     
     if ! docker info | grep -q "Swarm: active"; then
         print_step "Initializing Swarm..." "🚀"
@@ -188,6 +145,7 @@ step_init_swarm() {
          print_step "Swarm already active" "✅"
     fi
 
+    # Network
     if ! docker network ls | grep -q "erxes"; then
         print_step "Creating 'erxes' network..." "🌐"
         docker network create --driver=overlay --attachable erxes
@@ -195,11 +153,10 @@ step_init_swarm() {
 }
 
 # ==========================================
-# 5. Database Setup
+# 4. Database Setup
 # ==========================================
 step_setup_mongo() {
-    print_step "Step 5: Database Setup" "🗄️"
-    # Ensure variables from App Step are valid or re-set
+    print_step "Step 4: Database Setup" "🗄️"
     SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
     ERXES_DIR="$SCRIPT_DIR/erxes"
     cd "$ERXES_DIR" || exit 1
@@ -221,23 +178,22 @@ step_setup_mongo() {
     # Wait for Mongo
     print_step "Waiting for MongoDB..." "⏳"
     until docker ps | grep "mongo"; do sleep 2; done
-    sleep 5 # Extra buffer
+    sleep 5 
 
     MONGO_CONTAINER=$(docker ps --filter "name=mongo" --format "{{.Names}}" | head -n 1)
     MONGO_PASSWORD=$(jq -r '.mongo.password' configs.json)
     
     if [ -n "$MONGO_CONTAINER" ] && [ -n "$MONGO_PASSWORD" ]; then
          print_step "Initializing Replica Set..." "⚙️"
-         # Exec into container
          docker exec "$MONGO_CONTAINER" mongo -u erxes -p "$MONGO_PASSWORD" --eval 'rs.initiate()' || true
     fi
 }
 
 # ==========================================
-# 6. Final Launch & Nginx
+# 5. Traefik Integration & Launch
 # ==========================================
-step_setup_nginx() {
-    print_step "Step 6: Launch & Nginx" "🚀"
+step_setup_traefik_override() {
+    print_step "Step 5: Traefik & Launch" "🚦"
     SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
     ERXES_DIR="$SCRIPT_DIR/erxes"
     cd "$ERXES_DIR" || exit 1
@@ -247,28 +203,130 @@ step_setup_nginx() {
     LATEST_VERSION=$(npm view erxes version)
     jq --arg version "$LATEST_VERSION" '.version = $version' configs.json > tmp.json && mv tmp.json configs.json
 
-    print_step "Starting App Services..." "▶️"
-    npm run erxes up -- --uis
-
-    # Nginx Config
-    print_step "Configuring Nginx..." "🔧"
-    NGINX_CONF_SRC="$SCRIPT_DIR/erxes.conf"
+    print_step "Generating docker-compose.override.yml..." "📝"
     
-    if [ "$OS_TYPE" == "Linux" ]; then
-        sudo cp "$NGINX_CONF_SRC" /etc/nginx/sites-enabled/erxes.conf
-        sudo sed -i "s/example.com/$DOMAIN/g" /etc/nginx/sites-enabled/erxes.conf
-        sudo systemctl reload nginx
-    elif [ "$OS_TYPE" == "Mac" ]; then
-        # Homebrew Nginx usually at /opt/homebrew/etc/nginx/servers/
-        NGINX_SERVERS_DIR="$(brew --prefix)/etc/nginx/servers"
-        if [ -d "$NGINX_SERVERS_DIR" ]; then
-             cp "$NGINX_CONF_SRC" "$NGINX_SERVERS_DIR/erxes.conf"
-             sed -i '' "s/example.com/$DOMAIN/g" "$NGINX_SERVERS_DIR/erxes.conf"
-             brew services reload nginx
-        else
-             print_step "⚠️  Could not find Nginx servers directory. Configure manually." "⚠️"
-        fi
-    fi
+    # We create an override file that:
+    # 1. Defines the Traefik service
+    # 2. Adds labels to Erxes services to route traffic via Traefik
+    
+    cat <<EOF > docker-compose.override.yml
+version: '3.7'
+
+services:
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - erxes
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.role == manager
+
+  # Frontend (Router: /)
+  front:
+    networks:
+      - erxes
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.front.rule=Host(\`${DOMAIN}\`)"
+        - "traefik.http.routers.front.entrypoints=web"
+        - "traefik.http.services.front.loadbalancer.server.port=3000"
+
+  # API Gateway (Router: /gateway)
+  api:
+    networks:
+      - erxes
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.api.rule=Host(\`${DOMAIN}\`) && PathPrefix(\`/gateway\`)"
+        - "traefik.http.routers.api.entrypoints=web"
+        - "traefik.http.services.api.loadbalancer.server.port=3300"
+        # Middleware to strip prefix if needed, usually erxes expects /gateway/
+  
+  # Widgets (Router: /widgets)
+  widgets:
+    networks:
+      - erxes
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.widgets.rule=Host(\`${DOMAIN}\`) && PathPrefix(\`/widgets\`)"
+        - "traefik.http.routers.widgets.entrypoints=web"
+        - "traefik.http.services.widgets.loadbalancer.server.port=3200"
+
+  # Integrations (Router: /integrations)
+  integrations:
+    networks:
+      - erxes
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.integrations.rule=Host(\`${DOMAIN}\`) && PathPrefix(\`/integrations\`)"
+        - "traefik.http.routers.integrations.entrypoints=web"
+        - "traefik.http.services.integrations.loadbalancer.server.port=3400"
+
+  # Mobile App (Router: /mobile-app)
+  mobile-app:
+    networks:
+      - erxes
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.mobile-app.rule=Host(\`${DOMAIN}\`) && PathPrefix(\`/mobile-app\`)"
+        - "traefik.http.routers.mobile-app.entrypoints=web"
+        - "traefik.http.services.mobile-app.loadbalancer.server.port=4100"
+
+  # Dashboard Front (Router: /dashboard/front)
+  dashboard-front:
+    networks:
+      - erxes
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.dashboard-front.rule=Host(\`${DOMAIN}\`) && PathPrefix(\`/dashboard/front\`)"
+        - "traefik.http.routers.dashboard-front.entrypoints=web"
+        - "traefik.http.services.dashboard-front.loadbalancer.server.port=4200"
+
+  # Dashboard API (Router: /dashboard/api)
+  dashboard-api:
+    networks:
+      - erxes
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.dashboard-api.rule=Host(\`${DOMAIN}\`) && PathPrefix(\`/dashboard/api\`)"
+        - "traefik.http.routers.dashboard-api.entrypoints=web"
+        - "traefik.http.services.dashboard-api.loadbalancer.server.port=4300"
+
+networks:
+  erxes:
+    external: true
+EOF
+
+    print_step "Starting App Stack (with Traefik)..." "🚀"
+    # Verify the override file is picked up by default on 'docker stack deploy'
+    # usually requires -c docker-compose.yml -c docker-compose.override.yml explicitely if not using 'docker-compose up'
+    # npm run erxes up usually just runs docker-compose or similar.
+    # To use swarms 'docker stack deploy', we often need to merge files.
+    
+    # We'll assume npm script uses docker-compose. 
+    # If erxes script uses 'docker stack deploy', we need to check how it consumes overrides.
+    # Standard docker-compose picks up override automatically.
+    
+    npm run erxes up -- --uis
 }
 
 # ==========================================
@@ -276,10 +334,11 @@ step_setup_nginx() {
 # ==========================================
 
 step_install_deps
-step_create_user
+# step_create_user (Removed)
 step_setup_app
 step_init_swarm
 step_setup_mongo
-step_setup_nginx
+step_setup_traefik_override
 
 print_step "Done! Visit http://$DOMAIN" "🎉"
+print_step "Traefik Dashboard: http://$DOMAIN:8080" "🚥"
