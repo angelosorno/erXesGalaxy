@@ -47,8 +47,19 @@ step_install_deps() {
 
     # Update System
     if [ "$OS_TYPE" == "Linux" ]; then
-        sudo apt-get update -y
-        sudo apt-get install -y passwd util-linux jq curl software-properties-common git
+        if check_cmd apt-get; then
+            print_step "Detected apt-get (Debian/Ubuntu)" "🐧"
+            sudo apt-get update -y
+            sudo apt-get install -y passwd util-linux jq curl software-properties-common git
+        elif check_cmd apk; then
+            print_step "Detected apk (Alpine Linux)" "🏔️"
+            # PlayWithDocker usually runs as root, sudo might not be needed or is a wrapper.
+            # We try standard apk commands.
+            apk update
+            apk add --no-cache bash git curl jq util-linux openssl
+        else
+            print_step "❌ Unsupported Package Manager. Install dependencies (git, curl, jq) manually." "⚠️"
+        fi
     elif [ "$OS_TYPE" == "Mac" ]; then
         if ! check_cmd brew; then
             echo "❌ Homebrew required. Install from brew.sh"
@@ -64,11 +75,17 @@ step_install_deps() {
     else
         print_step "Installing Docker..." "🐳"
         if [ "$OS_TYPE" == "Linux" ]; then
-             sudo apt-get install apt-transport-https ca-certificates curl -y
-             curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-             echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-             sudo apt-get update -y
-             sudo apt-get install docker-ce docker-ce-cli containerd.io docker-compose-plugin -y
+             if check_cmd apt-get; then
+                 sudo apt-get install apt-transport-https ca-certificates curl -y
+                 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+                 echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+                 sudo apt-get update -y
+                 sudo apt-get install docker-ce docker-ce-cli containerd.io docker-compose-plugin -y
+             elif check_cmd apk; then
+                 print_step "On Alpine, assuming Docker is pre-installed or install via apk..." "🐳"
+                 apk add --no-cache docker docker-compose
+                 # Start service if not running (OpenRC usually, but in containers like PWD it acts differently)
+             fi
         else
              brew install --cask docker
              print_step "⚠️  Start Docker Desktop manually!" "⚠️"
@@ -82,8 +99,13 @@ step_install_deps() {
     else
          print_step "Installing Node.js v20..." "🟢"
          if [ "$OS_TYPE" == "Linux" ]; then
-            curl -sL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-            sudo apt-get install -y nodejs
+            if check_cmd apt-get; then
+                curl -sL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+                sudo apt-get install -y nodejs
+            elif check_cmd apk; then
+                # Alpine usually has recent nodejs in edge or latest repos
+                apk add --no-cache nodejs npm
+            fi
          else
             brew install node@20
             brew link node@20
