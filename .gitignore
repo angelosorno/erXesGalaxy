@@ -1,3 +1,7 @@
+# Erxes
+erxes/
+data/
+
 # Node.js dependencies
 node_modules/
 npm-debug.log
@@ -51,8 +55,6 @@ Thumbs.db
 
 # VS Code Config
 .vscode
-
-DELETE
 
 # Storage and Project Folder
 aws
