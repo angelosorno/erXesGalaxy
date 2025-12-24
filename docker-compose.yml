@@ -171,20 +171,7 @@ services:
       - erxes
     restart: always
 
-  # Automations Module
-  # Workflow engine for triggers and actions logic.
-  plugin-automations-api:
-    platform: linux/amd64
-    image: erxes/erxes-next-automations:latest
-    container_name: erxes-automations
-    environment:
-      <<: *plugin-env
-      OTEL_SERVICE_NAME: automations
-      SERVICE_NAME: automations
-      LOAD_BALANCER_ADDRESS: http://plugin-automations-api
-    networks:
-      - erxes
-    restart: always
+
 
   # ==============================================================================
   # ORCHESTRATION LAYER
@@ -213,7 +200,7 @@ services:
       INTROSPECTION: 'true'
       # REGISTERED PLUGINS:
       # Must match the service names found in Redis discovery.
-      ENABLED_PLUGINS: 'accounting,frontline,sales,automations'
+      ENABLED_PLUGINS: 'accounting,frontline,sales'
       # CORS CONFIGURATION:
       # Explicitly allowing the frontend dashboard origin.
       ALLOWED_DOMAINS: "${ALLOWED_DOMAINS}"
