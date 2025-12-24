@@ -1,0 +1,225 @@
+# ------------------------------------------------------------------------------
+# Network Configuration
+# ------------------------------------------------------------------------------
+# Defines a dedicated bridge network for secure inter-service communication.
+# 'external: true' implies this network is managed outside this composition 
+# or created explicitly during the orchestration phase.
+networks:
+  erxes:
+    external: true
+
+services:
+  # ==============================================================================
+  # INFRASTRUCTURE LAYER
+  # Critical state stores and caching services.
+  # ==============================================================================
+  
+  # MongoDB: Primary Data Store
+  # Configuring a Replica Set (rs0) is mandatory for Erxes transaction support.
+  # Security: Enforces authentication via keyFile and root credentials.
+  mongo:
+    hostname: mongo
+    image: mongo:4.4.25
+    container_name: mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: erxes
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+    networks:
+      - erxes
+    volumes:
+      # Data persistence
+      - ./data/db:/data/db
+      # Keyfile for internal replica set authentication
+      - ./mongo-key/mongo-key:/etc/mongodb/keys/mongo-key
+    command:
+      - --replSet
+      - rs0
+      - --bind_ip_all
+      - --keyFile
+      - /etc/mongodb/keys/mongo-key
+    extra_hosts:
+      - "mongo:127.0.0.1" # Required for local replica set self-discovery
+    restart: always
+
+  # Redis: In-Memory Data Structure Store
+  # Usage: Session management, caching, and pub/sub for service discovery.
+  # Security: Password protected; AOF enabled for durability.
+  redis:
+    image: redis:7.2.1
+    container_name: redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    networks:
+      - erxes
+    volumes:
+      - ./data/redis:/data
+    restart: always
+
+  # ==============================================================================
+  # APPLICATION LAYER - CORE
+  # Fundamental services required for the Experience OS (XOS) runtime.
+  # ==============================================================================
+
+  # Erxes UI: Frontend Presentation Layer
+  # Serves the Single Page Application (SPA).
+  # Configuration: Points to the Gateway (port 80) for all API interactions.
+  coreui:
+    platform: linux/amd64
+    image: erxes/erxes-next-ui:latest
+    container_name: erxes-ui
+    environment:
+      # Static asset paths and API endpoints
+      REACT_APP_PUBLIC_PATH: ''
+      REACT_APP_CDN_HOST: ${REACT_APP_CDN_HOST}
+      REACT_APP_API_URL: ${REACT_APP_API_URL}
+      REACT_APP_DASHBOARD_URL: ${REACT_APP_DASHBOARD_URL}
+      REACT_APP_API_SUBSCRIPTION_URL: ${REACT_APP_API_SUBSCRIPTION_URL}
+      # Nginx server configuration
+      NGINX_PORT: 80
+      NGINX_HOST: localhost
+      NODE_ENV: ${NODE_ENV}
+      REACT_APP_FILE_UPLOAD_MAX_SIZE: 524288000
+      REACT_APP_RELEASE: master
+    ports:
+      - "${UI_PORT}:80"
+    networks:
+      - erxes
+    restart: always
+
+  # Core API: System Kernel
+  # Responsibilities: Authentication, User Management, Permissions.
+  # Note: Acts as a subgraph in the federated architecture.
+  plugin-core-api:
+    platform: linux/amd64
+    image: erxes/erxes-next-core-api:latest
+    container_name: erxes-core
+    environment:
+      OTEL_SERVICE_NAME: plugin-core-api
+      SERVICE_NAME: core-api
+      PORT: 80
+      JWT_TOKEN_SECRET: ${JWT_SECRET}
+      LOAD_BALANCER_ADDRESS: http://plugin-core-api
+      MONGO_URL: mongodb://erxes:${MONGO_PASSWORD}@mongo:27017/erxes?authSource=admin&replicaSet=rs0
+      NODE_ENV: ${NODE_ENV}
+      DOMAIN: ${DOMAIN}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      RELEASE: master
+      VERSION: ${ERXES_VERSION}
+    networks:
+      - erxes
+    restart: always
+
+  # ==============================================================================
+  # APPLICATION LAYER - PLUGINS (MICROSERVICES)
+  # Modular functional extensions. Each runs as an independent subgraph.
+  # ==============================================================================
+
+  # Accounting Module
+  # Handles invoicing, payments, and financial records.
+  plugin-accounting-api:
+    platform: linux/amd64
+    image: erxes/erxes-next-accounting_api:latest
+    container_name: erxes-accounting
+    environment: &plugin-env
+      # Shared environment configuration for all plugins using YAML anchor
+      OTEL_SERVICE_NAME: accounting
+      SERVICE_NAME: accounting
+      PORT: 80
+      JWT_TOKEN_SECRET: ${JWT_SECRET}
+      LOAD_BALANCER_ADDRESS: http://plugin-accounting-api
+      MONGO_URL: mongodb://erxes:${MONGO_PASSWORD}@mongo:27017/erxes?authSource=admin&replicaSet=rs0
+      NODE_ENV: ${NODE_ENV}
+      DOMAIN: ${DOMAIN}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      VERSION: ${ERXES_VERSION}
+    networks:
+      - erxes
+    restart: always
+
+  # Frontline Module
+  # Shared inbox and customer support ticketing system.
+  plugin-frontline-api:
+    platform: linux/amd64
+    image: erxes/erxes-next-frontline_api:latest
+    container_name: erxes-frontline
+    environment:
+      <<: *plugin-env
+      OTEL_SERVICE_NAME: frontline
+      SERVICE_NAME: frontline
+      LOAD_BALANCER_ADDRESS: http://plugin-frontline-api
+    networks:
+      - erxes
+    restart: always
+
+  # Sales Module
+  # CRM, Pipelines, Deals, and Customer engagement tracking.
+  plugin-sales-api:
+    platform: linux/amd64
+    image: erxes/erxes-next-sales_api:latest
+    container_name: erxes-sales
+    environment:
+      <<: *plugin-env
+      OTEL_SERVICE_NAME: sales
+      SERVICE_NAME: sales
+      LOAD_BALANCER_ADDRESS: http://plugin-sales-api
+    networks:
+      - erxes
+    restart: always
+
+  # Automations Module
+  # Workflow engine for triggers and actions logic.
+  plugin-automations-api:
+    platform: linux/amd64
+    image: erxes/erxes-next-automations:latest
+    container_name: erxes-automations
+    environment:
+      <<: *plugin-env
+      OTEL_SERVICE_NAME: automations
+      SERVICE_NAME: automations
+      LOAD_BALANCER_ADDRESS: http://plugin-automations-api
+    networks:
+      - erxes
+    restart: always
+
+  # ==============================================================================
+  # ORCHESTRATION LAYER
+  # ==============================================================================
+
+  # API Gateway (Apollo Federation)
+  # Aggregates all subgraphs (Core + Plugins) into a single Supergraph API.
+  # Handles routing, query composition, and introspection.
+  gateway:
+    platform: linux/amd64
+    image: erxes/erxes-next-gateway:latest
+    container_name: erxes-gateway
+    environment:
+      OTEL_SERVICE_NAME: gateway
+      SERVICE_NAME: gateway
+      PORT: 80
+      LOAD_BALANCER_ADDRESS: http://gateway
+      JWT_TOKEN_SECRET: ${JWT_SECRET}
+      MONGO_URL: mongodb://erxes:${MONGO_PASSWORD}@mongo:27017/erxes?authSource=admin&replicaSet=rs0
+      NODE_ENV: ${NODE_ENV}
+      DOMAIN: ${DOMAIN}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      VERSION: ${ERXES_VERSION}
+      INTROSPECTION: 'true'
+      # REGISTERED PLUGINS:
+      # Must match the service names found in Redis discovery.
+      ENABLED_PLUGINS: 'accounting,frontline,sales,automations'
+      # CORS CONFIGURATION:
+      # Explicitly allowing the frontend dashboard origin.
+      ALLOWED_DOMAINS: "${ALLOWED_DOMAINS}"
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS}"
+    ports:
+      - "${GATEWAY_PORT}:80"
+    networks:
+      - erxes
+    restart: always

@@ -48,3 +48,4 @@ docker-compose.yml
 # Git files
 .git
 .gitignore
+!.gitignore
