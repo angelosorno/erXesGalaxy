@@ -60,3 +60,6 @@ Thumbs.db
 aws
 erxes
 snyk-linux
+
+# Autogenarated
+permissions.json
